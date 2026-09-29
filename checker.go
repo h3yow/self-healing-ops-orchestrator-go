@@ -25,7 +25,9 @@ func NewSimChecker() *SimChecker {
 }
 
 // Script 为某个检查项按调用次序编排结果；超出后沿用最后一条。
-func (c *SimChecker) Script(check string, results ...checkResult) {}
+func (c *SimChecker) Script(check string, results ...checkResult) {
+	c.results[check] = results
+}
 
 // CheckOK / CheckFail / CheckManual 构造确认结果。
 func CheckOK(detail string) checkResult     { return checkResult{ok: true, detail: detail} }
@@ -34,5 +36,15 @@ func CheckManual(detail string) checkResult { return checkResult{manual: true, d
 
 // Check 实现 Checker。
 func (c *SimChecker) Check(ctx context.Context, source string, check string) (bool, bool, string) {
-	return true, false, "ok"
+	c.calls[check]++
+	n := c.calls[check]
+	rs, ok := c.results[check]
+	if !ok || len(rs) == 0 {
+		return true, false, "default ok"
+	}
+	if n > len(rs) {
+		n = len(rs)
+	}
+	r := rs[n-1]
+	return r.ok, r.manual, r.detail
 }

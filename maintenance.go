@@ -10,7 +10,9 @@ type Window struct {
 }
 
 // Contains 判断 t 是否落在窗口内（含起点，不含终点）。
-func (w Window) Contains(t time.Time) bool { return false }
+func (w Window) Contains(t time.Time) bool {
+	return !t.Before(w.Start) && t.Before(w.End)
+}
 
 // Policy 修复策略：按故障类型匹配。
 type Policy struct {
@@ -26,7 +28,19 @@ type PolicySet struct {
 }
 
 // NewPolicySet 创建策略集合。
-func NewPolicySet(ps ...Policy) *PolicySet { return &PolicySet{policies: map[string]Policy{}} }
+func NewPolicySet(ps ...Policy) *PolicySet {
+	set := &PolicySet{policies: make(map[string]Policy, len(ps))}
+	for _, p := range ps {
+		set.policies[p.Kind] = p
+	}
+	return set
+}
 
 // Match 按故障类型查找策略。
-func (ps *PolicySet) Match(kind string) (Policy, bool) { return Policy{}, false }
+func (ps *PolicySet) Match(kind string) (Policy, bool) {
+	if ps == nil {
+		return Policy{}, false
+	}
+	p, ok := ps.policies[kind]
+	return p, ok
+}

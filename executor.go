@@ -46,14 +46,35 @@ func NewSimExecutor() *SimExecutor {
 }
 
 // Script 为某一步骤按尝试次数编排行为；超出脚本长度时沿用最后一条。
-func (s *SimExecutor) Script(step string, fns ...func(ctx context.Context) ExecResult) {}
+func (s *SimExecutor) Script(step string, fns ...func(ctx context.Context) ExecResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scripts[step] = fns
+}
 
 // Calls 返回某步骤被执行器实际调用的次数（用于验证幂等/不重复执行）。
-func (s *SimExecutor) Calls(step string) int { return 0 }
+func (s *SimExecutor) Calls(step string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[step]
+}
 
 // Execute 实现 Executor。
 func (s *SimExecutor) Execute(ctx context.Context, req ExecRequest) ExecResult {
-	return ExecResult{OK: true}
+	s.mu.Lock()
+	s.calls[req.Step]++
+	n := s.calls[req.Step]
+	fns, ok := s.scripts[req.Step]
+	fn := s.defaultFn
+	if ok && len(fns) > 0 {
+		if n <= len(fns) {
+			fn = fns[n-1]
+		} else {
+			fn = fns[len(fns)-1]
+		}
+	}
+	s.mu.Unlock()
+	return fn(ctx)
 }
 
 // Fail 构造一个业务失败结果。
