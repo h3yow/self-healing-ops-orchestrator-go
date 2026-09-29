@@ -9,15 +9,15 @@ import "time"
 type EventStatus string
 
 const (
-	EventReceived   EventStatus = "received"   // 已接收，待评估
-	EventSuppressed EventStatus = "suppressed" // 抑制窗口内重复事件被归并
-	EventRejected   EventStatus = "rejected"   // 被拒绝（维护窗口/策略不满足）
-	EventAccepted   EventStatus = "accepted"   // 通过评估，进入编排
+	EventReceived    EventStatus = "received"    // 已接收，待评估
+	EventSuppressed  EventStatus = "suppressed"  // 抑制窗口内重复事件被归并
+	EventRejected    EventStatus = "rejected"    // 被拒绝（维护窗口/策略不满足）
+	EventAccepted    EventStatus = "accepted"    // 通过评估，进入编排
 	EventRemediating EventStatus = "remediating" // 修复流程执行中
-	EventVerifying  EventStatus = "verifying"  // 修复动作完成，恢复确认中
-	EventResolved   EventStatus = "resolved"   // 恢复确认通过
-	EventFailed     EventStatus = "failed"     // 修复失败
-	EventManual     EventStatus = "manual"     // 需要人工介入
+	EventVerifying   EventStatus = "verifying"   // 修复动作完成，恢复确认中
+	EventResolved    EventStatus = "resolved"    // 恢复确认通过
+	EventFailed      EventStatus = "failed"      // 修复失败
+	EventManual      EventStatus = "manual"      // 需要人工介入
 )
 
 // RejectReason 区分事件被拒绝的原因。
@@ -26,8 +26,8 @@ type RejectReason string
 const (
 	RejectNone            RejectReason = ""
 	RejectMaintenance     RejectReason = "maintenance_window" // 处于维护窗口
-	RejectPolicy          RejectReason = "policy_not_allowed"  // 策略不允许（如级别过低/来源不受信）
-	RejectDuplicateActive RejectReason = "duplicate_active"    // 同一来源已有进行中的修复
+	RejectPolicy          RejectReason = "policy_not_allowed" // 策略不允许（如级别过低/来源不受信）
+	RejectDuplicateActive RejectReason = "duplicate_active"   // 同一来源已有进行中的修复
 )
 
 // FaultEvent 外部投递的故障事件。
@@ -53,11 +53,11 @@ const (
 
 // Step 修复流程中的一个步骤。
 type Step struct {
-	Name      string        // 步骤名（计划内唯一）
-	DependsOn []string      // 依赖的步骤名，全部成功后才可执行
-	Timeout   time.Duration // 单步执行超时，0 表示用默认值
-	MaxRetries int          // 失败可重试次数
-	Action    string        // 交给执行器的动作标识
+	Name       string        // 步骤名（计划内唯一）
+	DependsOn  []string      // 依赖的步骤名，全部成功后才可执行
+	Timeout    time.Duration // 单步执行超时，0 表示用默认值
+	MaxRetries int           // 失败可重试次数
+	Action     string        // 交给执行器的动作标识
 }
 
 // StepRecord 步骤的一次性持久化状态（恢复后据此跳过已完成步骤）。

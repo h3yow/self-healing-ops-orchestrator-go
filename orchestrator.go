@@ -9,9 +9,9 @@ import (
 
 // Config 编排器配置。
 type Config struct {
-	SuppressWindow time.Duration     // 同一来源重复事件的抑制窗口
-	DefaultTimeout time.Duration     // 步骤默认超时
-	Now            func() time.Time  // 可注入时钟，便于测试
+	SuppressWindow time.Duration    // 同一来源重复事件的抑制窗口
+	DefaultTimeout time.Duration    // 步骤默认超时
+	Now            func() time.Time // 可注入时钟，便于测试
 }
 
 // Orchestrator 自愈编排器。
