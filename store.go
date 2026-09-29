@@ -32,6 +32,8 @@ type Store interface {
 	GetRun(runID string) (RunRecord, bool, error)
 	// FindActiveRun 查找指定来源是否已有未终结的运行。
 	FindActiveRun(source string) (RunRecord, bool, error)
+	// ListRuns 返回全部运行记录。
+	ListRuns() ([]RunRecord, error)
 	// AppendAudit 追加审计条目。
 	AppendAudit(e AuditEntry) error
 	// Audit 返回全部审计条目（按追加顺序）。
@@ -73,6 +75,16 @@ func (s *MemoryStore) FindActiveRun(source string) (RunRecord, bool, error) {
 		}
 	}
 	return RunRecord{}, false, nil
+}
+
+func (s *MemoryStore) ListRuns() ([]RunRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]RunRecord, 0, len(s.runs))
+	for _, rec := range s.runs {
+		out = append(out, rec)
+	}
+	return out, nil
 }
 
 func (s *MemoryStore) AppendAudit(e AuditEntry) error {
