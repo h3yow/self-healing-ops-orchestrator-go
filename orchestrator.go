@@ -56,11 +56,12 @@ type SubmitResult struct {
 }
 
 // Submit 接收故障事件：去重、维护窗口与策略校验，通过后同步执行编排。
+// 准入判定（去重/窗口/策略/活跃运行）在单锁内原子完成，保证并发投递结果一致。
 func (o *Orchestrator) Submit(ctx context.Context, ev FaultEvent) SubmitResult {
 	now := o.cfg.Now()
 
-	// 1. 抑制窗口内同来源重复事件 -> 归并，不重复触发。
 	o.mu.Lock()
+	// 1. 抑制窗口内同来源重复事件 -> 归并，不重复触发。
 	if t, ok := o.lastSeen[ev.Source]; ok && now.Sub(t) < o.cfg.SuppressWindow {
 		o.mu.Unlock()
 		rec, found, _ := o.store.FindActiveRun(ev.Source)
@@ -71,15 +72,15 @@ func (o *Orchestrator) Submit(ctx context.Context, ev FaultEvent) SubmitResult {
 		o.audit("", ev.ID, "event", fmt.Sprintf("suppressed duplicate from %s within %s", ev.Source, o.cfg.SuppressWindow))
 		return SubmitResult{Accepted: false, Status: EventSuppressed, Reason: RejectNone, RunID: runID}
 	}
-	o.mu.Unlock()
 
 	// 2. 维护窗口拒绝。
 	for _, w := range o.windows {
 		if w.Contains(now) {
-			rec := o.newRunRecord(ev)
+			rec := o.newRunRecordLocked(ev)
 			rec.EventStatus = EventRejected
 			rec.RejectWhy = RejectMaintenance
 			_ = o.store.SaveRun(rec)
+			o.mu.Unlock()
 			o.audit(rec.RunID, ev.ID, "event", fmt.Sprintf("rejected: maintenance window %q", w.Name))
 			return SubmitResult{Accepted: false, Status: EventRejected, Reason: RejectMaintenance, RunID: rec.RunID}
 		}
@@ -88,33 +89,33 @@ func (o *Orchestrator) Submit(ctx context.Context, ev FaultEvent) SubmitResult {
 	// 3. 策略校验：无匹配策略或级别不足。
 	pol, ok := o.policies.Match(ev.Kind)
 	if !ok || ev.Severity < pol.MinSeverity {
-		rec := o.newRunRecord(ev)
+		rec := o.newRunRecordLocked(ev)
 		rec.EventStatus = EventRejected
 		rec.RejectWhy = RejectPolicy
 		_ = o.store.SaveRun(rec)
+		o.mu.Unlock()
 		o.audit(rec.RunID, ev.ID, "event", fmt.Sprintf("rejected: policy not allowed (kind=%s severity=%d)", ev.Kind, ev.Severity))
 		return SubmitResult{Accepted: false, Status: EventRejected, Reason: RejectPolicy, RunID: rec.RunID}
 	}
 
 	// 4. 同一来源已有进行中的运行。
 	if rec, found, _ := o.store.FindActiveRun(ev.Source); found {
+		o.mu.Unlock()
 		o.audit(rec.RunID, ev.ID, "event", "rejected: duplicate active run for source "+ev.Source)
 		return SubmitResult{Accepted: false, Status: EventRejected, Reason: RejectDuplicateActive, RunID: rec.RunID}
 	}
 
-	// 5. 接受并执行编排。
-	rec := o.newRunRecord(ev)
+	// 5. 接受：登记运行记录并占用抑制窗口，然后释放锁再执行编排。
+	rec := o.newRunRecordLocked(ev)
 	rec.EventStatus = EventAccepted
 	for _, st := range pol.Plan {
 		rec.Steps = append(rec.Steps, StepRecord{Name: st.Name, State: StepPending})
 	}
 	_ = o.store.SaveRun(rec)
-	o.audit(rec.RunID, ev.ID, "event", fmt.Sprintf("accepted: kind=%s severity=%d", ev.Kind, ev.Severity))
-
-	o.mu.Lock()
 	o.lastSeen[ev.Source] = now
 	o.mu.Unlock()
 
+	o.audit(rec.RunID, ev.ID, "event", fmt.Sprintf("accepted: kind=%s severity=%d", ev.Kind, ev.Severity))
 	o.executePlan(ctx, rec, pol)
 	return SubmitResult{Accepted: true, Status: EventAccepted, RunID: rec.RunID}
 }
@@ -150,9 +151,13 @@ func (o *Orchestrator) executePlan(ctx context.Context, rec RunRecord, pol Polic
 	_ = o.store.SaveRun(rec)
 
 	for {
-		// 找出一批可执行步骤：pending 且依赖全部成功。
+		// 先在无并发的情况下扫描出本批次：可执行步骤与需跳过的步骤。
+		type runnable struct {
+			st  *StepRecord
+			def Step
+		}
+		var batch []runnable
 		progress := false
-		var wg sync.WaitGroup
 		for i := range rec.Steps {
 			st := &rec.Steps[i]
 			// pending 待执行；running 视为上次进程中断的残留，允许重跑。
@@ -163,23 +168,28 @@ func (o *Orchestrator) executePlan(ctx context.Context, rec RunRecord, pol Polic
 			if stepDef == nil {
 				st.State = StepFailed
 				st.LastErr = "step definition missing"
+				progress = true
 				continue
 			}
-			depState := depsState(rec.Steps, stepDef.DependsOn)
-			switch depState {
+			switch depsState(rec.Steps, stepDef.DependsOn) {
 			case StepFailed, StepSkipped:
 				st.State = StepSkipped
 				st.LastErr = "dependency not satisfied"
 				o.audit(rec.RunID, rec.EventID, "step", fmt.Sprintf("step %s skipped: dependency not satisfied", st.Name))
 				progress = true
 			case StepSucceeded:
+				batch = append(batch, runnable{st: st, def: *stepDef})
 				progress = true
-				wg.Add(1)
-				go func(st *StepRecord, def *Step) {
-					defer wg.Done()
-					o.runStep(ctx, &rec, st, *def)
-				}(st, stepDef)
 			}
+		}
+		// 同批次步骤并发执行；写回发生在 wg.Wait 之后，避免读写竞争。
+		var wg sync.WaitGroup
+		for _, r := range batch {
+			wg.Add(1)
+			go func(r runnable) {
+				defer wg.Done()
+				o.runStep(ctx, &rec, r.st, r.def)
+			}(r)
 		}
 		wg.Wait()
 		_ = o.store.SaveRun(rec)
@@ -277,12 +287,10 @@ func (o *Orchestrator) verify(ctx context.Context, rec *RunRecord, pol Policy) {
 	}
 }
 
-// newRunRecord 生成新的运行记录。
-func (o *Orchestrator) newRunRecord(ev FaultEvent) RunRecord {
-	o.mu.Lock()
+// newRunRecordLocked 生成新的运行记录，调用方必须持有 o.mu。
+func (o *Orchestrator) newRunRecordLocked(ev FaultEvent) RunRecord {
 	o.runSeq++
 	seq := o.runSeq
-	o.mu.Unlock()
 	return RunRecord{
 		RunID:       fmt.Sprintf("run-%d-%s", seq, ev.ID),
 		EventID:     ev.ID,
