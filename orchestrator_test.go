@@ -256,9 +256,9 @@ func TestRecoverAfterCrash(t *testing.T) {
 // TestVerdictOutcomes 恢复确认：成功 / 失败 / 需人工 三种判定。
 func TestVerdictOutcomes(t *testing.T) {
 	cases := []struct {
-		name       string
-		check      checkResult
-		wantStatus EventStatus
+		name        string
+		check       checkResult
+		wantStatus  EventStatus
 		wantVerdict Verdict
 	}{
 		{"check-pass", CheckOK("usage 40%"), EventResolved, VerdictSuccess},
